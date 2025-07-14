@@ -82,8 +82,16 @@ uniform float DepthMultiplier<
 
 uniform bool IgnoreSky<
 	ui_label = "Ignore Sky";
-	ui_tooltip = "May cause an abrubt transition at the horizon.";
+	ui_tooltip = "Prevents the effect from being applied to the sky. Use 'Sky Transition Smoothness' to control the fade-out at the horizon.";
 > = 0;
+
+uniform float SkyTransitionSmoothness<
+	ui_type = "slider";
+	ui_label = "Sky Transition Smoothness";
+	ui_category = "General";
+	ui_tooltip = "Controls how gradually the effect fades out at the horizon when 'Ignore Sky' is enabled. A larger value means a larger, softer transition.";
+	ui_min = 0.001; ui_max = 1.0;
+> = 0.1;
 
 uniform int Debug <
 ui_type = "combo";
@@ -153,12 +161,21 @@ void MeanAndVariancePS1(float4 vpos : SV_POSITION, float2 texcoord : TEXCOORD, o
 void WienerFilterPS(float4 vpos : SV_POSITION, float2 texcoord : TEXCOORD, out float3 fogRemoved : SV_TARGET0)
 {
 	float depth = ReShade::GetLinearizedDepth(texcoord);
-	
-	if(IgnoreSky && depth >= 1)
-	{
-		discard;
-	}
 
+	float smoothAlpha = Alpha;
+	if (IgnoreSky)
+	{
+		// Smoothly fade out the effect as we approach the sky
+		float transitionStart = 1.0 - SkyTransitionSmoothness;
+		float skyFactor = smoothstep(transitionStart, 1.0, depth);
+		smoothAlpha *= (1.0 - skyFactor);
+
+		if (smoothAlpha <= 0.0)
+		{
+			discard;
+		}
+	}
+	
 	float mean = tex2D(sMean, texcoord).r;
 	float variance = tex2D(sVariance, texcoord).r;
 	float noise = tex2Dlod(sVariance, float4(texcoord, 0, MAX_MIP - 1)).r;
@@ -209,9 +226,7 @@ void WienerFilterPS(float4 vpos : SV_POSITION, float2 texcoord : TEXCOORD, out f
 	transmission *= (exp(-DepthMultiplier * depth * 0.4));
 	transmission *= exp(-TransmissionMultiplier * 0.4);
 	transmission = clamp(transmission, 0.05, 1);  
-	
 
-	 
 	float y = dot(color, float3(0.299, 0.587, 0.114));
 	y = ((y - airlight) / transmission) + airlight;
 	float cb = -0.168736 * color.r - 0.331264 * color.g + 0.500000 * color.b;
@@ -220,7 +235,7 @@ void WienerFilterPS(float4 vpos : SV_POSITION, float2 texcoord : TEXCOORD, out f
 		y + 1.402 * cr,
 		y - 0.344136 * cb - 0.714136 * cr,
 		y + 1.772 * cb);
-	fogRemoved = lerp(color, fogRemoved, Alpha);
+	fogRemoved = lerp(color, fogRemoved, smoothAlpha);
 	
 	if(Debug == 1)
 	{
@@ -255,4 +270,3 @@ technique DeHaze<ui_tooltip = "This shader attempts to remove fog from the image
 		PixelShader = WienerFilterPS;
 	}
 }
-		
